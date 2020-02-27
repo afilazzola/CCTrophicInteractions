@@ -1,0 +1,479 @@
+---
+title: 'The occurrence of a butterfly species (parnassius) is determined by climate and sedum presence'
+author: "Alex Filazzola"
+date: "Feb 2020"
+output:
+  
+  html_document:
+    theme: yeti
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: console
+---
+
+### Abstract
+Climate change is expected to affect some species more than others. Alpine species are particularly susceptible because changes in climate shift distributions to higher altitudes that can result in extirpation on certain mountains. Additionally, species that are reliant on interactions with other species can be at increased risk because mismatches in their distributions over time. Here, we compare the project changes in distribution of Rocky Mountain Apollo butterfly (Parnassius smintheus) and the host-plant they are reliant on. We hypothesize that climate change will negatively impact P. smintheus more relative to other alpine butterfly species because parnassius is dependent on a host-plant that has a different climate niche and thus decreasing overlap in area with climate change. We used maximum entropy (MaxEnt) to model the projected occurrence of P. smintheus, its host-plant, and four other butterfly species with climate change. We modelled the future distributions using four major global circulation models, each of the four representative concentration pathways of climate change, and two time frames (2050, 2070). The variables we used in the models included altitude, soil characteristics, and climate variables from [WorldClim](http://www.worldclim.org/).
+
+![](butterfly.jpg)
+
+
+### Species distribution modelling
+
+All species distribution modelling was conducting using MaxEnt on a Linux server from [Compute Canada](https://www.computecanada.ca/). Two separate scripts were used: 1) models for parnassius with sedum [pasmModels](), and 2) models for all other species [AllSppModels](). In addition, we provide scripts that combine and crop all the climate rasters across the different RCPs & GCMs [combineClimateRas.r](). 
+Scripts that were not run on the server include generating the resistance matrices [resistanceMatrix.r](), determining the relevant soil variables [soildata.r](), converting a digitial elevation model to a standard deviation at the 1 km resolution [altprocessing.r](), and creating a polygon for the study area [studyArea.r]().
+Climate and elevation rasters are not included in this repository because the rasters are too large for support on GitHub. The climate rasters were downloaded from [WorldClim](https://www.worldclim.org/version1)
+
+
+```{r warning=FALSE, message=FALSE}
+## load packages 
+library(raster)
+library(dismo)
+library(ClusterR)
+
+library(rgdal)
+library(rJava)
+# library(maptools)
+library(rgeos)
+library(MASS)
+library(bestglm)
+library(tidyverse)
+
+## Load study area
+studyarea <- readOGR("data//studyOutline.shp")
+
+
+```
+
+
+
+### download sedum and parnassius data
+```{r}
+# spp.name <- data.frame(spp=c("sela","pasm"),genus=c("Sedum","Parnassius"),species=c("lanceolatum","smintheus"))
+# 
+# ## Collected bias species from http://friendsofkootenay.ca/
+# ## bias.spp <- read.csv("data//biasdata.csv", stringsAsFactors=FALSE)
+# ## Collected from butterflies of North America https://www.butterfliesofamerica.com/list.htm
+# bias.spp <- read.csv("data//biasdata2.csv", stringsAsFactors=FALSE)
+# attach(bias.spp)
+# 
+# for(i in 1:length(Genus))
+# {
+# tryCatch({
+# temp <- gbif(Genus[i],Species[i], geo=T, ext=extent(r0), ntries=10) ## extract species name from GBIF server
+# if(is.null(temp)) stop(paste("Species failed: ",Genus[i],Species[i]))
+# temp<-na.omit(temp[,c("lon","lat")]) ## remove all columns except lat-long
+# temp <- temp[!duplicated(temp), ] ## duplicated occurences
+# temp["species.name"]<- rep(paste(Genus[i]," ",Species[i]),nrow(temp)) ##generate column for species name
+# ##write csv with species occurences
+# write.csv(temp, paste0("data//bias//",Genus[i],".",Species[i],".csv"),row.names=F)
+# }, 
+# error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+# }
+# 
+# ## List species files and join them
+# occurdat<-list.files("data//bias//",pattern=".csv$",full=T)
+# 
+# butterflies <- data.frame()
+# for(i in 1:length(occurdat)){
+# temp<-read.csv(occurdat[i])
+# butterflies<-rbind(butterflies,temp)
+# }
+# 
+# write.csv(butterflies, "data//butterfly.occ.csv", row.names = FALSE)
+```
+
+### Plot areas of test species
+```{r}
+
+## Load species
+sedm <- read.csv("data//sedumRed.csv")
+pasm <- read.csv("data//parnassius.clean.csv")
+
+
+## get lat long from each dataset
+bothspp <- rbind(sedm[,c("lon","lat")], pasm[,c("lon","lat")])
+bothspp[,"species"] <- c(rep("Sedum sp.",nrow(sedm)),rep("P. smintheus", nrow(pasm)))
+
+## crop to study area
+bothspp <- subset(bothspp, lon < -101 & lon > -148.7)  ## adjust lon
+bothspp <- subset(bothspp, lat < 69 & lat > 32) ## adjust at
+
+## Create convex polygons of study area
+find_hull <- function(df) df[chull(df$lon, df$lat), ]
+hulls <- plyr::ddply(bothspp, "species", find_hull)
+
+## Colour blind palette
+cbPalette <- c("#56B4E9","#E69F00")
+
+
+## Plot distributions
+ggplot(bothspp, aes(x=lon, y=lat, color=species, fill=species)) + geom_polygon(data = hulls, alpha = 0.5) + theme(text = element_text(size=12), axis.text.x = element_text(angle=35, hjust=1), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + xlab("Longitude") + ylab("Latitude") + geom_point(size=0.8) + scale_fill_manual(values = cbPalette) + scale_color_manual(values = cbPalette)
+```
+
+### Generate raster bias file
+```{r eval=FALSE}
+
+# Get a list of species on GBIF for Canada
+Insect: GBIF.org (08 November 2018) GBIF Occurrence Download https://doi.org/10.15468/dl.sunrzb
+Plant: GBIF.org (08 November 2018) GBIF Occurrence Download https://doi.org/10.15468/dl.cwjtau
+Lists were refined to Canada, has coordinates, Insecta/Plantae, &  observation/living speciman/museum, and without geospatial issues
+
+plants <- read.csv("data//plantsbias.csv")
+insect <- read.csv("data//insectbias.csv")
+
+biasspp <- rbind(plants,insect[-2])
+
+butterflies <- read.csv("data//butterfly.occ.csv")
+
+## create empty raster
+empty.ras <- raster(nrows=dim(r0)[1],ncols=dim(r0)[1], crs=crs(r0), ext=extent(r0))
+
+coordinates(butterflies) <- ~ lon +lat ## convert species into sp.df
+butterflies <- crop(butterflies, empty.ras) ## remove occurrences outside of study area
+
+# ## plot occurrences
+occur.ras<-rasterize(butterflies@coords, empty.ras, 1)
+plot(occur.ras)
+
+##density function to create bias raster
+presences<-which(values(occur.ras)==1)
+pres.locs<-coordinates(occur.ras)[presences,]
+
+dens<-kde2d(pres.locs[,1],pres.locs[,2],n=c(nrow(occur.ras),ncol(occur.ras)))
+dens.ras<-raster(dens)
+plot(dens.ras)
+
+## write bias file raster
+writeRaster(dens.ras, "data//biasfile.bil", overwrite=T)
+
+```
+
+
+
+### Test relevant climate variables
+```{r eval=FALSE}
+r1 <- raster("data\\rasters\\alt.bil") #altitude
+r2 <- raster("data\\rasters\\bio_1.bil") # annual temp
+r3 <- raster("data\\rasters\\bio_12.bil") # annual precip
+r4 <- raster("data\\rasters\\bio_6.bil") # min temperature in coldest month
+r5 <- raster("data\\rasters\\bio_5.bil") # max temp of warmest month (July temp)
+r6 <- raster("data\\rasters\\snowpack\\snowpack10.bil") ## snow in October for higher latitudes
+r7 <- raster("data\\rasters\\snowpack\\snowpack12.bil") ## snow in December for majority of spp range
+r8 <- raster("data\\rasters\\tmin\\tmin_10.bil") # average min temperature in October for higher latitudes
+r9 <- raster("data\\rasters\\tmin\\tmin_11.bil") # average min temperature in November for majority of spp range
+r10 <- raster("data\\rasters\\tmax\\tmax_10.bil") # average max temperature in October for higher latitudes
+r11 <- raster("data\\rasters\\tmax\\tmax_11.bil") # average max temperature in November for majority of spp range
+
+## soil rasters as suggests by Jens as proxies for bedrock
+topsoiloc <- raster("data//soildata//topsoiloc.bil") ## organic carbon in soil
+topsoilph <- raster("data//soildata//topsoilph.bil")  ## ph in water of soil
+topsoilcec <- raster("data//soildata//topsoilcec.bil")  ## cation exchange - EC of soil
+topsoilsilt <- raster("data//soildata//topsoilsilt.bil")  ## silt in topsoil
+topsoilsand <- raster("data//soildata//topsoilsand.bil")  ## sand in topsoil
+
+soilstack <- stack(topsoiloc,topsoilph, topsoilcec, topsoilsilt, topsoilsand)
+soilstack <- crop(soilstack, west.ext)
+
+## load bias file
+biasfile <- raster("data//biasfile.bil")
+
+# climate.all <- raster()
+# for(i in 1:length(occurdat)){
+#   temp.ras <- raster(occurdat[i])
+#   climate.all <- stack(climate.all, temp.ras)
+# }
+
+climate.all <- stack(r1,r3,r4,r10)
+
+## crop to western Canada
+climate.all <- crop(climate.all, extent(biasfile))
+
+## Read in Parnassius occurrence
+pasm.gps<- read.csv("data//sedumall.csv")
+
+## convert facilitated occurrence into spatial points
+pasm.gps <- pasm.gps[,1:2]
+crs.world <-CRS("+proj=longlat +datum=WGS84")
+coordinates(pasm.gps) <- ~lon+lat
+proj4string(pasm.gps) <- crs.world
+
+##crop out points to western Canada
+pasm.gps <- crop(pasm.gps, extent(biasfile))
+
+## extract climate values for parnassius
+pasm.climate <- extract(soilstack, pasm.gps)
+
+## extract climate values for background
+backgr <- randomPoints(soilstack, 5000)
+backgr.climate <- extract(soilstack, backgr)
+
+## join two datasets and add presence absence column
+climate.data <- rbind(data.frame(pasm.climate),data.frame(backgr.climate))
+climate.data[,"y"] <- as.numeric( c(rep("1",nrow(pasm.climate)),rep("0",nrow(backgr.climate))))
+
+# ## run best subsets
+m1 <- bestglm(climate.data, family=binomial, IC="AIC")
+
+## see best models and output
+m1$BestModels
+summary(m1)
+
+## Dropped snowpack in November because not relevant in best subsets
+## dropped mininum temperatures because not significant contributors in Maxent (i.e. <3 %)
+
+```
+
+### Create the niche space of target species
+```{r eval=FALSE}
+
+## list target species
+spp.list <- c("data//bias//Erebia.epipsodea.csv","data//bias//Pontia.occidentalis.csv","data//bias//Chlosyne.palla.csv","data//bias//Pieris.rapae.csv","data//parnassius.clean.csv","data//sedumRed.csv")
+
+## load points
+extractClim <- function(x){
+
+gps<- read.csv(x)
+
+## convert facilitated occurrence into spatial points
+gps <- gps[,1:2]
+crs.world <-CRS("+proj=longlat +datum=WGS84")
+coordinates(gps) <- ~lon+lat
+proj4string(gps) <- crs.world
+
+##crop out points to western Canada
+gps <- crop(gps, studyarea)
+
+## extract climate values for species
+gps.climate <- raster::extract(allstack, gps) ## all variables
+## output climate variable
+return(data.frame(gps.climate))
+}
+
+
+## join all the species into one dataframe
+climSpecies <- data.frame()
+  for(i in 1:length(spp.list)){
+  temp <- extractClim(spp.list[i])
+  spp.name <- basename(spp.list[i])
+  spp.name <- gsub(".csv","", spp.name)
+  temp[,"species"] <- spp.name
+  climSpecies <- rbind(climSpecies, temp)
+  }
+
+library(vegan)
+
+## remove NAs
+climSpecies <- na.omit(climSpecies)
+## Remove outlier soil OC
+climSpecies <- subset(climSpecies, topsoiloc < 12)
+##drop sedum
+climSpecies <- subset(climSpecies, species!="sedumRed")
+
+## DCA with ordination data
+ordClim <- climSpecies[1:10][rowSums(climSpecies[1:10]) != 0 ,]
+# ordClim <- decostand(climSpecies2[1:10], method="standardize")
+ordClim <- climSpecies[1:10]
+
+## conduct a DCA
+dca1 <- decorana(ordClim)
+summary(dca1) ## <2.5 axis lengths = linear
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7","#000000")
+
+## standardize
+ordClim <- decostand(ordClim, method="standardize")
+
+## Run PCA
+pca1 <- rda(ordClim, scale=T, center=T) ## run as correlation matrix and centralize
+par(mar = c(4.5, 4.5, 0.5, 0.5)) 
+plot(pca1, type="n", xlab="PCA1 (52.4%)", ylab=c("PCA2 (15.2%)"), cex.lab=1.3,
+     xlim=c(-2,2), ylim=c(-1,1.5))
+ordihull(scores(pca1, choices=c(1,2), display="sites"),  group = climSpecies$species, draw="polygon", col=c("#999999", "#E69F00", "#56B4E9", "#009E73","#F0E442"), alpha=150)
+orditorp(scores(pca1, choices=c(1,2), display="species")/2.5, display="species", cex=1)
+
+unique(climSpecies2$species)
+
+## compare differences among species
+library(lmPerm)
+
+## Axis 1
+pcaOut <- scores(pca1, choices=c(1), display="sites")
+m1 <- aov(pcaOut[,1] ~ climSpecies$species)
+m1.pm <- aovp(pcaOut[,1] ~ climSpecies$species)
+summary(m1.pm)
+TukeyHSD(m1)
+
+## Axis 2
+pcaOut <- scores(pca1, choices=c(2), display="sites")
+m2 <- aov(pcaOut[,1] ~ climSpecies$species)
+m2.pm <- aovp(pcaOut[,1] ~ climSpecies$species)
+summary(m2.pm)
+TukeyHSD(m2)
+
+### extract range of variables from species
+library(tidyverse)
+
+means <- climSpecies2 %>% group_by(species) %>% summarize_all(funs(mean)) %>% data.frame(.)
+mins <- climSpecies2 %>% group_by(species) %>% summarize_all(funs(min)) %>% data.frame(.)
+maxs <- climSpecies2 %>% group_by(species) %>% summarize_all(funs(max)) %>% data.frame(.)
+
+summarized <- rbind(means,mins,maxs)
+summarized[,"stat"] <- c(rep("mean",nrow(means)),rep("min",nrow(mins)),rep("max",nrow(maxs)))
+
+## trends in climate patterns among species
+summarized
+
+## rename species
+climSpecies <- merge(climSpecies, data.frame(species=unique(climSpecies$species), Species=c("E. epipsodea", "P. occidentalis","C. palla","P. rapae", "P. smintheus")))
+
+### generate histograms for species
+library(tidyverse)
+##Altitude
+ggplot(climSpecies, aes(x=alt)) + geom_density(aes(fill=Species), alpha=0.3) + xlab("altitude (m)") + theme(text = element_text(size=14))
+## Alt diff
+ggplot(climSpecies, aes(x=elevationdiff)) + geom_density(aes(fill=Species), alpha=0.3) + xlab("variation in elevation (SD)") + theme(text = element_text(size=14))
+## Tmax11
+ggplot(climSpecies, aes(x=tmax11)) + geom_density(aes(fill=Species), alpha=0.3)+ xlab("November tmax (°C)") + theme(text = element_text(size=14))
+## bio3
+ggplot(climSpecies, aes(x=bio3)) + geom_density(aes(fill=species), alpha=0.3)+ xlab("isothermality (SD)") + theme(text = element_text(size=14))
+## bio19
+ggplot(climSpecies, aes(x=bio19)) + geom_density(aes(fill=Species), alpha=0.3)+ xlab("precipitation in coldest quarter (mm)") + theme(text = element_text(size=14))
+## bio6
+ggplot(climSpecies, aes(x=bio6)) + geom_density(aes(fill=Species), alpha=0.3)+ xlab("coldest temp in coldest month") + theme(text = element_text(size=14))
+## bio3
+## prec7
+ggplot(climSpecies, aes(x=prec07)) + geom_density(aes(fill=Species), alpha=0.3)+ xlab("July precipitation (mm)") + theme(text = element_text(size=14))
+## topsoiloc
+ggplot(climSpecies, aes(x=topsoiloc)) + geom_density(aes(fill=species), alpha=0.3) + xlim(0,12)+ xlab("soil organic carbon (%)") + theme(text = element_text(size=14))
+## topsoilsilt
+ggplot(climSpecies, aes(x=topsoilsilt)) + geom_density(aes(fill=Species), alpha=0.3) + xlab("silt in soil (%)") + theme(text = element_text(size=14))
+```
+
+
+### Analyze differences in models
+```{r}
+otherspp <- read.csv("othersppOut.csv")
+pasmSedum <- read.csv("pasmOut.csv")
+
+pasmClimate <- subset(otherspp, species == "parnassius.clean")
+
+diffModels <- data.frame(modeltype=c(rep("climateOnly",nrow(pasmClimate)),rep("sedumClimate",nrow(pasmSedum))), lost=c(pasmClimate$areaLoss,pasmSedum$areaLoss),gain=c(pasmClimate$areaGain,pasmSedum$areaGain))
+
+## loss
+m1 <- glm(lost ~ modeltype, data=diffModels, family="quasibinomial")
+summary(m1)
+anova(m1, test="Chisq")
+
+## pairwise comparison
+library(emmeans)
+emm1 <- emmeans(m1, specs = pairwise ~ modeltype)
+emm1
+aggregate(lost ~ modeltype, data=diffModels,FUN=mean) ## values
+
+
+## gain
+m2 <- glm(gain ~ modeltype, data=diffModels, family="quasibinomial")
+summary(m2)
+anova(m2, test="Chisq")
+
+## pairwise comparison
+emm2 <- emmeans(m2, specs = pairwise ~ modeltype)
+emm2
+aggregate(gain ~ modeltype, data=diffModels,FUN=mean) ## values
+
+
+
+
+#### Compare among species
+
+## revise pasm-sedum dataset
+pasmSedum[,"species"] <- "parnassius-sedum"
+names(pasmSedum)[2:3] <- c("cor.model","auc.model") ## rename columns
+otherspp[,c("cor.current","cor.future")] <- NA ## add empty columns for sedum correlation
+allspp <- rbind(pasmSedum, otherspp)
+
+## proportion of range change
+allspp[,"loss"] <- allspp[,"areaLoss"]/allspp[,"oldRange"] ## proportion of oldrange
+allspp[,"gain"] <- allspp[,"areaGain"]/allspp[,"oldRange"]
+
+## Gain
+m3 <- glm(gain ~ species, data=allspp, family="binomial")
+summary(m3)
+anova(m3, test="Chisq")
+
+
+## pairwise comparison
+emm3 <- emmeans(m3, specs = pairwise ~ species)
+emm3
+aggregate(gain ~ species, data=allspp,FUN=mean) ## values
+
+
+
+## Loss
+m4 <- glm(loss ~ species, data=allspp, family="quasibinomial")
+summary(m4)
+anova(m4, test="Chisq")
+
+
+## pairwise comparison
+emm4 <- emmeans(m4, specs = pairwise ~ species)
+emm4
+aggregate(loss ~ species, data=allspp,FUN=mean) ## values
+
+
+
+#### comparison with different RCP
+library(tidyverse)
+
+## standard error
+se<-function(x) {sd(x)/sqrt(length(x))}
+
+## separate GCM & RCP
+allspp[,"RCP"] <- gsub("[^[:digit:]]","",allspp$model)
+allspp[,"GCM"] <- gsub("[[:digit:]]","",allspp$model)
+
+## rename species to be simpler
+speciesShort <- data.frame(species = unique(allspp$species), spp=c("P. smintheus w/ Sedum","C. palla","P. smintheus","Sedum sp.","E. epipsodea","P. rapae","P. occidentalis"))
+allspp <- merge(allspp, speciesShort, by="species")
+
+meanchange <- allspp %>% group_by(RCP, spp) %>% summarize(loss=mean(areaLoss),errorLoss=se(areaLoss), gain=mean(areaGain), errorGain=se(areaGain))
+
+### plot gain and loss as barplot
+
+
+## convert change in study area to change from current distribution
+allspp[,"loss"] <- allspp[,"areaLoss"]/allspp[,"oldRange"] ## proportion of oldrange
+allspp[,"loss"] <- allspp[,"loss"]*-1 ## conert to negative
+allspp[,"gain"] <- allspp[,"areaGain"]/allspp[,"oldRange"]
+allspp[,"net"] <- allspp[,"loss"]+allspp[,"gain"]
+allsppchange <- allspp %>% gather(change, value, c(loss,gain,net))
+
+## convert values to percentagse
+allsppchange[,"value"] <- allsppchange[,"value"]*100
+
+change <- allsppchange %>% group_by(RCP, GCM, spp, change) %>% summarize(avg=mean(value), error=se(value)) %>%  data.frame(.)
+
+## reorder plot
+change$spp <- factor(change$spp, levels= c("P. smintheus","P. smintheus w/ Sedum","Sedum sp.","C. palla","E. epipsodea","P. occidentalis","P. rapae"))
+
+## Rename GCM
+gcmdf <- data.frame(GCM=c("gf","he","mg","mp"), gcm=c("GF (drier)","HE (drier & much warmer)","MG (wetter & less seasonal)","MP (modest warming & precipitation variability)"))
+change <- merge(change, gcmdf, by="GCM")
+
+## CB palette
+cbPalette <- c("#56B4E9","#E69F00","#999999")
+
+## Convert RCP to decimal
+change$RCP <- as.character(as.numeric(change$RCP)/10)
+
+
+## plot
+ggplot(change, aes(x=spp, y=avg, fill=change)) + geom_bar(stat="identity", position=position_dodge()) + scale_fill_manual(values=cbPalette) + geom_hline(yintercept = 0) +geom_errorbar(aes(ymin=avg-error, ymax=avg+error), width=.2, position=position_dodge(.9)) + facet_grid(RCP ~ gcm ) + theme_bw()+ ylab("Percent change in range")  + xlab("") + theme(text = element_text(size=12), axis.text.x = element_text(angle=35, hjust=1), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylim(-20,40) + geom_vline(xintercept=2.5, linetype="dashed")
+
+## values for results section
+change %>% group_by(spp, change, GCM) %>% summarize(total=mean(avg)) %>%  data.frame(.)
+
+```
+
