@@ -21,8 +21,8 @@ Climate change is expected to affect some species more than others. Alpine speci
 
 ### Species distribution modelling
 
-All species distribution modelling was conducting using MaxEnt on a Linux server from [Compute Canada](https://www.computecanada.ca/). Two separate scripts were used: 1) models for parnassius with sedum [pasmModels](), and 2) models for all other species [AllSppModels](). In addition, we provide scripts that combine and crop all the climate rasters across the different RCPs & GCMs [combineClimateRas.r](). 
-Scripts that were not run on the server include generating the resistance matrices [resistanceMatrix.r](), determining the relevant soil variables [soildata.r](), converting a digitial elevation model to a standard deviation at the 1 km resolution [altprocessing.r](), and creating a polygon for the study area [studyArea.r]().
+All species distribution modelling was conducting using MaxEnt on a Linux server from [Compute Canada](https://www.computecanada.ca/). Two separate scripts were used: 1) models for parnassius with sedum [pasmModels](https://github.com/afilazzola/CCTrophicInteractions/blob/master/SuperCompScripts/pasmModels.r), and 2) models for all other species [AllSppModels](https://github.com/afilazzola/CCTrophicInteractions/blob/master/SuperCompScripts/AllSppModels.R). In addition, we provide scripts that combine and crop all the climate rasters across the different RCPs & GCMs [combineClimateRas.r](https://github.com/afilazzola/CCTrophicInteractions/blob/master/SuperCompScripts/combineClimateRas.r). 
+Scripts that were not run on the server include generating the resistance matrices [resistanceMatrix.r](https://github.com/afilazzola/CCTrophicInteractions/blob/master/otherScripts/resistanceMatrix.r), determining the relevant soil variables [soildata.r](https://github.com/afilazzola/CCTrophicInteractions/blob/master/otherScripts/soildata.r), converting a digitial elevation model to a standard deviation at the 1 km resolution [altprocessing.r](https://github.com/afilazzola/CCTrophicInteractions/blob/master/otherScripts/altprocessing.r), and creating a polygon for the study area [studyArea.r](https://github.com/afilazzola/CCTrophicInteractions/blob/master/otherScripts/studyArea.r).
 Climate and elevation rasters are not included in this repository because the rasters are too large for support on GitHub. The climate rasters were downloaded from [WorldClim](https://www.worldclim.org/version1)
 
 
@@ -33,7 +33,7 @@ library(dismo)
 library(ClusterR)
 
 library(rgdal)
-library(rJava)
+#library(rJava)
 # library(maptools)
 library(rgeos)
 library(MASS)
@@ -477,3 +477,68 @@ change %>% group_by(spp, change, GCM) %>% summarize(total=mean(avg)) %>%  data.f
 
 ```
 
+### Maps of projected species change in the future
+```{r}
+###  get outline of western NA
+# get California outline
+us <- getData("GADM", country="USA", level=1) ## use state bounds from gadm website:
+can <- getData("GADM", country="CAN", level=1) ## use state bounds from gadm website:
+NApoly <- rbind(us,can)
+studyarea <- raster("data//studyArea.tif")
+NApoly <- crop(NApoly, studyarea)
+
+NAreduced <- gSimplify(NApoly, tol=0.15, topology=FALSE) ## reduce tolerance to minimize islands
+plot(NAreduced)
+spdf <- SpatialPolygonsDataFrame(NAreduced, data.frame(NApoly))
+
+studyOutline <- NAreduced
+
+## Load study area
+studyOutline <- readOGR("data//studyOutline.shp")
+
+library(colorspace)
+## list species
+species <- unique(allspp$species)
+
+### list rasters
+rasDiff <- list.files("F://PASMmodels//RasterDiff//", pattern=glob2rx(paste0(species[1],"*85*")), full.names = T)
+
+# rasDiff <- list.files("E://PASMmodels//RasterDiff//", pattern="*85*", full.names = T) ## parnassius w sedum
+rasOut <- list.files("F://PASMmodels//rasOut//", pattern="current", full.names = T)
+
+### Average across climate models
+diffmap <- mean(stack(rasDiff))
+
+## Load current raster file
+curmap <- raster(rasOut[1])
+
+## select color ramp
+# colors <- rev(diverge_hcl(11, palette = "Blue Red 3"))
+# colors[1:4] <- c( "#5F1415" , "#5F1415",  "#9D3D3D", "#9D3D3D" )
+# colors[7:11] <- c("#265BAB","#265BAB","#002F70","#002F70")
+# colors[5:6] <- "#FFFFFF00"
+
+## select new color ramp
+colors <- rev(diverge_hcl(11, palette = "Blue Red 3"))
+colors[1:4] <- c( "#FF7F50" , "#FF7F50",  "#FFA400", "#FFA400" )
+colors[7:11] <- c("#067BC2","#067BC2","#002F70","#002F70")
+colors[5:6] <- "#FFFFFF00"
+
+
+## set breakpoints 
+breakpoints <- seq(-1,1, length.out = 11)
+
+## set breakpoints for current distro
+breakpointsgrey <- seq(0,1, length.out = 11)
+colorgrey <- rev(sequential_hcl(11, palette = "Grays"))
+
+## plot area where PASM is lost
+par(mar = c(3, 3, 0.5, 0.5))
+plot(curmap, breaks=breakpointsgrey, col=alpha(colorgrey,0.7), legend=FALSE) ## add current distro as grey 
+plot(diffmap, breaks=breakpoints, col=colors, add=T) ## add change in distro with colours
+plot(studyOutline, add=T, border = "#4C4C4C90") ## outline of western North America
+text(-145,36, expression(italic("C. palla")), cex=2)
+# 
+# text(-145,36, expression(atop(italic("P. smintheus"),italic("w/ sedum"))), cex=2)
+
+```
