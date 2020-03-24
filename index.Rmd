@@ -26,6 +26,11 @@ Scripts that were not run on the server include generating the resistance matric
 Climate and elevation rasters are not included in this repository because the rasters are too large for support on GitHub. The climate rasters were downloaded from [WorldClim](https://www.worldclim.org/version1)
 
 
+None of this work would have been possible if not for those that make GBIF possible through data collection, cleaning, compiling, and publishing. The datasets used in this study can be found below: 
+
+Insect: GBIF.org (08 November 2018) GBIF Occurrence Download https://doi.org/10.15468/dl.sunrzb
+Plant: GBIF.org (08 November 2018) GBIF Occurrence Download https://doi.org/10.15468/dl.cwjtau
+
 ```{r warning=FALSE, message=FALSE}
 ## load packages 
 library(raster)
@@ -478,7 +483,7 @@ change %>% group_by(spp, change, GCM) %>% summarize(total=mean(avg)) %>%  data.f
 ```
 
 ### Maps of projected species change in the future
-```{r}
+```{r eval=FALSE}
 ###  get outline of western NA
 # get California outline
 us <- getData("GADM", country="USA", level=1) ## use state bounds from gadm website:
@@ -501,7 +506,7 @@ library(colorspace)
 species <- unique(allspp$species)
 
 ### list rasters
-rasDiff <- list.files("F://PASMmodels//RasterDiff//", pattern=glob2rx(paste0(species[1],"*85*")), full.names = T)
+rasDiff <- list.files("F://PASMmodels//RasterDiff//", pattern=glob2rx(paste0(species[5],"*85*")), full.names = T)
 
 # rasDiff <- list.files("E://PASMmodels//RasterDiff//", pattern="*85*", full.names = T) ## parnassius w sedum
 rasOut <- list.files("F://PASMmodels//rasOut//", pattern="current", full.names = T)
@@ -510,7 +515,7 @@ rasOut <- list.files("F://PASMmodels//rasOut//", pattern="current", full.names =
 diffmap <- mean(stack(rasDiff))
 
 ## Load current raster file
-curmap <- raster(rasOut[1])
+curmap <- raster(rasOut[6])
 
 ## select color ramp
 # colors <- rev(diverge_hcl(11, palette = "Blue Red 3"))
@@ -533,11 +538,17 @@ breakpointsgrey <- seq(0,1, length.out = 11)
 colorgrey <- rev(sequential_hcl(11, palette = "Grays"))
 
 ## plot area where PASM is lost
+
+
 par(mar = c(3, 3, 0.5, 0.5))
 plot(curmap, breaks=breakpointsgrey, col=alpha(colorgrey,0.7), legend=FALSE) ## add current distro as grey 
 plot(diffmap, breaks=breakpoints, col=colors, add=T) ## add change in distro with colours
 plot(studyOutline, add=T, border = "#4C4C4C90") ## outline of western North America
-text(-145,36, expression(italic("C. palla")), cex=2)
+text(-145,36, expression(italic("P. rapae")), cex=2)
+
+pdf("figure3.pdf", useDingbats=F, width=21, height=7)
+par(mfrow=c(2,2))
+dev.off()
 # 
 # text(-145,36, expression(atop(italic("P. smintheus"),italic("w/ sedum"))), cex=2)
 
